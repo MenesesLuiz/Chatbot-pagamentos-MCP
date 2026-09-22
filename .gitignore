@@ -1,0 +1,11 @@
+.venv/
+node_modules/
+data/app.db
+__pycache__/
+.idea/
+dist/
+.env
+.env.*
+!.env.example
+context.md
+desafio.md
