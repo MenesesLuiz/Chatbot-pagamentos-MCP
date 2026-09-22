@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+pyjwt
+pwdlib
+argon2-cffi
+google-genai>=2.3.0
+mcp
+python-dotenv

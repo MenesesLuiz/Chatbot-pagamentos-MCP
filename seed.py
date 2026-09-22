@@ -1,15 +1,18 @@
 import sqlite3
 import os
+from dotenv import load_dotenv
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 
 # Configura o gerador de hash de senhas
 password_hash = PasswordHash((Argon2Hasher(),))
 
-DB_PATH = "data/app.db"
+load_dotenv()
+DB_PATH = os.getenv("DATABASE_PATH", "data/app.db")
 
 def seed():
     # Remove o banco antigo se existir para recriar do zero
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
 
@@ -38,7 +41,8 @@ def seed():
     # 3. Tabela de Chats
     c.execute('''CREATE TABLE chats (
         id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL
+        user_id TEXT NOT NULL,
+        gemini_interaction_id TEXT
     )''')
 
     # 4. Tabela de Mensagens do Histórico
