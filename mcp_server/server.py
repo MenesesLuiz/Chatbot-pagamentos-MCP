@@ -2,18 +2,21 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Literal
 from mcp.server import MCPServer
 
 mcp = MCPServer("Pagamentos MCP")
 
 # Variáveis de ambiente que o nosso backend (FastAPI) vai injetar
-DB_PATH = os.environ.get("DATABASE_PATH", "data/app.db")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+configured_db_path = Path(os.environ.get("DATABASE_PATH", "data/app.db"))
+DB_PATH = configured_db_path if configured_db_path.is_absolute() else PROJECT_ROOT / configured_db_path
 USER_ID = os.environ.get("USER_ID", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
 
 def conectar():
-    conn = sqlite3.connect(DB_PATH, timeout=20.0)
+    conn = sqlite3.connect(str(DB_PATH), timeout=20.0)
     conn.row_factory = sqlite3.Row
     return conn
 

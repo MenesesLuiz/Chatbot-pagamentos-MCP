@@ -22,7 +22,7 @@ ChatPay é um assistente virtual inteligente integrado a um sistema de pagamento
 
 ## 🛠️ Arquitetura e Ferramentas (MCP Tools)
 
-O servidor MCP (`mcp_server/server.py`) expõe **3 ferramentas principais** que o LLM aciona de forma autônoma e segura:
+O servidor MCP (`mcp_server/server.py`) expõe **4 ferramentas principais** que o LLM aciona de forma autônoma e segura:
 
 1. **`listar_catalogo`**: Consulta os produtos ativos e com estoque disponível no banco de dados.
 2. **`registrar_intencao`**: Cria um carrinho temporário (expira em 10 minutos) validando estoque, quantidade e regras de negócio sem movimentar saldo financeiro.
@@ -62,10 +62,10 @@ chatbot-pagamentos-mcp/
 Instale o Ollama pelo [site oficial](https://ollama.com/download). Depois, abra um terminal e baixe o modelo utilizado pelo projeto:
 
 ```shell
-ollama pull qwen3:1.7b
+ollama pull qwen3:4b
 ```
 
-O backend usa exatamente o modelo `qwen3:1.7b`, configurado em `backend/main.py`.
+O backend usa o modelo definido por `OLLAMA_MODEL` no arquivo `.env`. O padrão do projeto é `qwen3:4b`.
 
 Verifique se o modelo foi instalado:
 
@@ -84,7 +84,7 @@ Se aparecer uma mensagem informando que a porta já está em uso, o serviço pro
 Opcionalmente, teste o modelo diretamente:
 
 ```shell
-ollama run qwen3:1.7b
+ollama run qwen3:4b
 ```
 
 ## 3. Configurar o Backend e o Banco de Dados
@@ -96,7 +96,7 @@ python -m venv .venv
 .venv\Scripts\activate
 
 # Instalar dependências da API e do MCP
-pip install fastapi uvicorn pydantic pyjwt pwdlib argon2-cffi ollama mcp python-dotenv
+pip install -r requirements.txt
 
 # Criar a configuração local a partir do exemplo (Linux/macOS)
 cp .env.example .env
@@ -109,7 +109,7 @@ python -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(32))"
 # Copie a linha exibida acima para o arquivo .env, substituindo SECRET_KEY=
 
 # Executar o seed para criar e popular o banco de dados do zero
-python seed.py
+python seed.py --reset
 ```
 
 ## 4. Iniciar o Servidor Backend (FastAPI)
@@ -150,12 +150,12 @@ Para verificar quais modelos do Ollama estão instalados na sua máquina, execut
 ollama list
 ```
 
-O back-end está configurado para utilizar o modelo `qwen3:1.7b`. Caso você tenha outra versão instalada, altere a configuração do back-end para utilizar exatamente o nome exibido pelo comando `ollama list`.
+O back-end utiliza o modelo definido em `OLLAMA_MODEL`. Caso você tenha outra versão instalada, altere essa variável para utilizar exatamente o nome exibido pelo comando `ollama list`.
 
 No meu caso, por exemplo:
 
 ```text
-qwen3:1.7b
+qwen3:4b
 ```
 
 ---

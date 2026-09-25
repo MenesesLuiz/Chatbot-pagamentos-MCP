@@ -1,19 +1,28 @@
 import sqlite3
 import os
+import sys
+from pathlib import Path
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 
 # Configura o gerador de hash de senhas
 password_hash = PasswordHash((Argon2Hasher(),))
 
-DB_PATH = "data/app.db"
+PROJECT_ROOT = Path(__file__).resolve().parent
+configured_db_path = Path(os.getenv("DATABASE_PATH", "data/app.db"))
+DB_PATH = configured_db_path if configured_db_path.is_absolute() else PROJECT_ROOT / configured_db_path
 
-def seed():
-    # Remove o banco antigo se existir para recriar do zero
-    if os.path.exists(DB_PATH):
+def seed(reset=False):
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    if DB_PATH.exists():
+        if not reset:
+            raise RuntimeError(
+                f"O banco já existe em {DB_PATH}. Use 'python seed.py --reset' para recriá-lo."
+            )
         os.remove(DB_PATH)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
 
     # 1. Tabela de Usuários
@@ -121,4 +130,4 @@ def seed():
     print("✅ Produtos e usuários de teste inseridos.")
 
 if __name__ == "__main__":
-    seed()
+    seed(reset="--reset" in sys.argv)

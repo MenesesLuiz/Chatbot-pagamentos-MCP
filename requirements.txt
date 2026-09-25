@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+PyJWT
+pwdlib
+argon2-cffi
+ollama
+mcp
+python-dotenv

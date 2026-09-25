@@ -2,9 +2,11 @@ import os
 import json
 import re
 import sqlite3
+import sys
 import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -22,7 +24,8 @@ from mcp.client.session import ClientSession
 
 
 # CONFIGURAÇÕES
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
@@ -34,12 +37,23 @@ if len(SECRET_KEY.encode("utf-8")) < 32:
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 2
-DB_PATH = "data/app.db"
+
+
+def resolve_path(value: str | None, default: Path) -> Path:
+    path = Path(value) if value else default
+    return path if path.is_absolute() else BASE_DIR / path
+
+
+DB_PATH = resolve_path(os.getenv("DATABASE_PATH"), BASE_DIR / "data" / "app.db")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:4b")
+MCP_SERVER_PATH = BASE_DIR / "mcp_server" / "server.py"
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="ChatPay Backend API")
 security = HTTPBearer()
 password_hash = PasswordHash((Argon2Hasher(),))
-ollama = AsyncClient()
+ollama = AsyncClient(host=OLLAMA_HOST)
 
 # Permite que o frontend React converse com a API
 app.add_middleware(
@@ -127,7 +141,7 @@ def resposta_afirma_aprovacao(texto: str) -> bool:
 
 def get_db():
     # TIMEOUT ADICIONADO PARA EVITAR "DATABASE IS LOCKED"
-    conn = sqlite3.connect(DB_PATH, timeout=20.0)
+    conn = sqlite3.connect(str(DB_PATH), timeout=20.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -281,11 +295,11 @@ async def chat(req: ChatRequest, user_id: str = Depends(verify_token)):
         messages_for_llm.append(msg)
 
     server_params = StdioServerParameters(
-        command="python",
-        args=["mcp_server/server.py"],
+        command=sys.executable,
+        args=[str(MCP_SERVER_PATH)],
         env={
             **os.environ,
-            "DATABASE_PATH": DB_PATH,
+            "DATABASE_PATH": str(DB_PATH),
             "USER_ID": user_id,
             "CHAT_ID": chat_id
         }
@@ -309,7 +323,7 @@ async def chat(req: ChatRequest, user_id: str = Depends(verify_token)):
 
             while True:
                 response = await ollama.chat(
-                    model="qwen3:1.7b",
+                    model=OLLAMA_MODEL,
                     messages=messages_for_llm,
                     tools=ollama_tools
                 )
