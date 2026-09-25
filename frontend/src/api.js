@@ -26,6 +26,9 @@ export const sendMessage = async (message, token) => {
     },
     body: JSON.stringify({ message }),
   });
-  if (!res.ok) throw new Error("Erro na API");
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || "Erro na API");
+  }
   return res.json();
 };

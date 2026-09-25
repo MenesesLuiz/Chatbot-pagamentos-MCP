@@ -16,21 +16,21 @@ O projeto deverá:
 ### 2.1 Fluxo atual
 
 ```text
-React → FastAPI/JWT → Gemini Interactions API → MCP via stdio → SQLite
+React → FastAPI/JWT → Ollama → MCP via stdio → SQLite
 ```
 
 ### 2.2 Principais problemas encontrados
 
-- Ollama estava fixo em `backend/main.py`.
-- `requirements.txt` foi criado e passou a centralizar as dependências do backend.
-- O seed passou a criar o diretório `data/` antes de gerar `data/app.db`.
-- CORS agora usa `FRONTEND_ORIGIN` configurável.
+- Ollama está fixo em `backend/main.py`.
+- Não existe `requirements.txt`; a instalação depende de comandos manuais do README.
+- O diretório `data/` não existe, mas `seed.py` tenta criar `data/app.db`; o seed pode falhar.
+- CORS está aberto para qualquer origem.
 - O modelo pode solicitar `realizar_compra`; a validação atual depende parcialmente de texto do usuário.
 - Não existem Checkout Mandates, Payment Mandates, assinaturas digitais ou receipts.
 - JWT usa HS256, adequado apenas para autenticação local; não substitui as assinaturas exigidas pelo AP2.
 - O pagamento atual é apenas uma simulação de limite e estoque.
 - O frontend guarda o JWT em `localStorage`.
-- O README documenta as quatro ferramentas MCP existentes.
+- O README afirma haver três ferramentas MCP, mas documenta quatro.
 - Há imagens referenciadas no README que não estão presentes no projeto.
 
 ---
@@ -49,18 +49,6 @@ A especificação atual é a v0.2:
 
 ## Fase 1 — Trocar Ollama pela API Gemini
 
-### Status
-
-- [x] Cliente Ollama removido do backend.
-- [x] Cliente assíncrono `google-genai` integrado pela Interactions API.
-- [x] Function calling manual conectado às ferramentas MCP.
-- [x] Histórico visual mantido no SQLite com `gemini_interaction_id`.
-- [x] Chamadas de ferramenta validadas pelo backend antes da execução.
-- [x] Limites de chamadas e timeouts configuráveis adicionados.
-- [x] Dependências, `.env.example` e README atualizados.
-- [ ] Criar e preencher a chave `GEMINI_API_KEY` no ambiente local.
-- [ ] Executar a validação funcional com a API Gemini.
-
 ### Arquivos envolvidos
 
 - `backend/main.py`
@@ -69,8 +57,6 @@ A especificação atual é a v0.2:
 - Novo `requirements.txt`
 
 ### 1. Criar a credencial Gemini
-
-Status: pendente de configuração local.
 
 1. Criar um projeto no Google AI Studio.
 2. Criar uma chave Gemini restrita à API Gemini.
@@ -82,8 +68,6 @@ A documentação atual recomenda manter a chave exclusivamente no backend e apli
 - [Segurança das chaves Gemini](https://ai.google.dev/gemini-api/docs/api-key)
 
 ### 2. Atualizar o `.env.example`
-
-Status: concluído.
 
 Adicionar:
 
@@ -98,8 +82,6 @@ DATABASE_PATH=data/app.db
 O modelo deve ficar configurável, sem ser fixado no código.
 
 ### 3. Criar `requirements.txt`
-
-Status: concluído.
 
 Incluir as dependências atuais do backend e substituir:
 
@@ -119,8 +101,6 @@ A SDK oficial atual é `google-genai`.
 
 ### 4. Substituir o cliente Ollama
 
-Status: concluído.
-
 Em `backend/main.py`:
 
 - remover `AsyncClient` do Ollama;
@@ -133,8 +113,6 @@ A API Gemini possui suporte oficial a function calling.
 - [Documentação de function calling](https://ai.google.dev/gemini-api/docs/generate-content/function-calling)
 
 ### 5. Adaptar as ferramentas MCP para o formato Gemini
-
-Status: concluído.
 
 O fluxo será:
 
@@ -152,8 +130,6 @@ Usar function calling manual, não automático, porque `realizar_compra` precisa
 
 ### 6. Usar histórico compatível com Gemini
 
-Status: concluído para a primeira integração.
-
 O formato de mensagens do Ollama não deve ser reaproveitado diretamente.
 
 Recomendação mínima:
@@ -169,8 +145,6 @@ A API atual recomenda conversas estatais usando `previous_interaction_id`.
 
 ### 7. Adicionar limites de segurança
 
-Status: concluído para a migração inicial.
-
 Na migração:
 
 - limite máximo de chamadas Gemini por mensagem;
@@ -181,8 +155,6 @@ Na migração:
 - impedir que texto do modelo seja considerado prova de pagamento.
 
 ### 8. Validar a migração
-
-Status: pendente de chave Gemini e execução dos cenários.
 
 Testar:
 

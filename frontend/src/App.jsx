@@ -45,7 +45,7 @@ function App() {
       const data = await sendMessage(userMsg, token);
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
     } catch (error) {
-      alert('Erro ao comunicar com o backend MCP.');
+      alert(error.message || 'Erro ao comunicar com o backend MCP.');
     } finally {
       setLoading(false);
     }
@@ -57,16 +57,14 @@ function App() {
     setMessages([]);
   };
 
-  // Função para converter **texto** em negrito no React
+  // Exibe respostas do modelo como texto simples, sem marcas de Markdown.
   const formatMessage = (text) => {
     if (!text) return "";
-    const parts = text.split(/(\*\*.*?\*\*)/g);
-    return parts.map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={index}>{part.slice(2, -2)}</strong>;
-      }
-      return part;
-    });
+    return text
+      .replace(/&#x20;|&#32;|&nbsp;/gi, ' ')
+      .replace(/\\([_*`])/g, '$1')
+      .replace(/\*\*/g, '')
+      .replace(/`/g, '');
   };
 
   if (!token) {

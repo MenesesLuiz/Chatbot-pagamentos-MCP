@@ -1,4 +1,3 @@
-import asyncio
 import os
 import json
 import re
@@ -16,7 +15,7 @@ from dotenv import load_dotenv
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 
-from google import genai
+from ollama import AsyncClient
 from mcp import StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.session import ClientSession
@@ -35,28 +34,17 @@ if len(SECRET_KEY.encode("utf-8")) < 32:
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 2
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError(
-        "GEMINI_API_KEY não configurada ou vazia. Preencha GEMINI_API_KEY no arquivo .env."
-    )
-
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-DB_PATH = os.getenv("DATABASE_PATH", "data/app.db")
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-GEMINI_TIMEOUT_SECONDS = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "45"))
-MCP_TIMEOUT_SECONDS = float(os.getenv("MCP_TIMEOUT_SECONDS", "20"))
-MAX_GEMINI_TOOL_CALLS = int(os.getenv("MAX_GEMINI_TOOL_CALLS", "8"))
+DB_PATH = "data/app.db"
 
 app = FastAPI(title="ChatPay Backend API")
 security = HTTPBearer()
 password_hash = PasswordHash((Argon2Hasher(),))
-gemini = genai.Client(api_key=GEMINI_API_KEY)
+ollama = AsyncClient()
 
 # Permite que o frontend React converse com a API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -138,59 +126,10 @@ def resposta_afirma_aprovacao(texto: str) -> bool:
 
 
 def get_db():
+    # TIMEOUT ADICIONADO PARA EVITAR "DATABASE IS LOCKED"
     conn = sqlite3.connect(DB_PATH, timeout=20.0)
     conn.row_factory = sqlite3.Row
-    colunas = conn.execute("PRAGMA table_info(chats)").fetchall()
-    if colunas and not any(coluna["name"] == "gemini_interaction_id" for coluna in colunas):
-        conn.execute("ALTER TABLE chats ADD COLUMN gemini_interaction_id TEXT")
-        conn.commit()
     return conn
-
-
-def interaction_outputs(interaction):
-    return getattr(interaction, "outputs", None) or getattr(interaction, "steps", None) or []
-
-
-def interaction_text(interaction) -> str:
-    for output in reversed(interaction_outputs(interaction)):
-        if getattr(output, "type", None) == "text":
-            return getattr(output, "text", "") or ""
-    return getattr(interaction, "output_text", "") or ""
-
-
-def interaction_function_calls(interaction):
-    return [
-        output
-        for output in interaction_outputs(interaction)
-        if getattr(output, "type", None) == "function_call"
-    ]
-
-
-def serializar_modelo(modelo):
-    if hasattr(modelo, "model_dump"):
-        return modelo.model_dump()
-    if hasattr(modelo, "dict"):
-        return modelo.dict()
-    return str(modelo)
-
-
-async def executar_tool_mcp(mcp_client, tool_name: str, tool_args: dict) -> str:
-    try:
-        mcp_result = await asyncio.wait_for(
-            mcp_client.call_tool(tool_name, tool_args),
-            MCP_TIMEOUT_SECONDS,
-        )
-        return "".join(
-            getattr(item, "text", "")
-            for item in mcp_result.content
-            if getattr(item, "type", None) == "text"
-        )
-    except Exception:
-        return json.dumps({
-            "status": "recusado",
-            "erro": "ERRO_MCP",
-            "mensagem": "Não foi possível executar a ferramenta.",
-        }, ensure_ascii=False)
 
 
 def registrar_auditoria(conn, user_id, chat_id, tool_name, argumentos, resultado_texto):
@@ -308,199 +247,190 @@ def get_history(user_id: str = Depends(verify_token)):
 @app.post("/chat")
 async def chat(req: ChatRequest, user_id: str = Depends(verify_token)):
     conn = get_db()
-    try:
-        agora = datetime.now(timezone.utc).isoformat()
-        metodo_confirmado = detectar_metodo_confirmado(req.message)
-        compra_aprovada_nesta_requisicao = False
-        intencao_criada_nesta_requisicao = False
-        chamadas_gemini = 0
+    agora = datetime.now(timezone.utc).isoformat()
+    metodo_confirmado = detectar_metodo_confirmado(req.message)
+    compra_aprovada_nesta_requisicao = False
+    intencao_criada_nesta_requisicao = False
+    resposta_final = ""
 
-        chat = conn.execute(
-            "SELECT id, gemini_interaction_id FROM chats WHERE user_id = ? ORDER BY id DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        if not chat:
-            chat_id = f"chat_{uuid.uuid4().hex[:8]}"
-            interaction_id = None
-            conn.execute(
-                "INSERT INTO chats (id, user_id, gemini_interaction_id) VALUES (?, ?, ?)",
-                (chat_id, user_id, interaction_id),
-            )
-        else:
-            chat_id = chat["id"]
-            interaction_id = chat["gemini_interaction_id"]
-
-        conn.execute(
-            "INSERT INTO messages (chat_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-            (chat_id, user_id, "user", req.message, agora),
-        )
+    chat = conn.execute("SELECT id FROM chats WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+    if not chat:
+        chat_id = f"chat_{uuid.uuid4().hex[:8]}"
+        conn.execute("INSERT INTO chats (id, user_id) VALUES (?, ?)", (chat_id, user_id))
         conn.commit()
+    else:
+        chat_id = chat["id"]
 
-        server_params = StdioServerParameters(
-            command="python",
-            args=["mcp_server/server.py"],
-            env={
-                **os.environ,
-                "DATABASE_PATH": DB_PATH,
-                "USER_ID": user_id,
-                "CHAT_ID": chat_id,
-            },
-        )
+    conn.execute(
+        "INSERT INTO messages (chat_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+        (chat_id, user_id, "user", req.message, agora)
+    )
+    conn.commit()
 
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as mcp_client:
-                await asyncio.wait_for(mcp_client.initialize(), MCP_TIMEOUT_SECONDS)
-                mcp_tools = await asyncio.wait_for(mcp_client.list_tools(), MCP_TIMEOUT_SECONDS)
-                gemini_tools = [
-                    {
-                        "type": "function",
+    historico_db = conn.execute(
+        "SELECT role, content, tool_calls_json, tool_name FROM messages WHERE chat_id = ? ORDER BY id",
+        (chat_id,)
+    ).fetchall()
+
+    messages_for_llm = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for row in historico_db:
+        msg = {"role": row["role"]}
+        if row["content"]: msg["content"] = row["content"]
+        if row["tool_calls_json"]: msg["tool_calls"] = json.loads(row["tool_calls_json"])
+        if row["tool_name"]: msg["name"] = row["tool_name"]
+        messages_for_llm.append(msg)
+
+    server_params = StdioServerParameters(
+        command="python",
+        args=["mcp_server/server.py"],
+        env={
+            **os.environ,
+            "DATABASE_PATH": DB_PATH,
+            "USER_ID": user_id,
+            "CHAT_ID": chat_id
+        }
+    )
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as mcp_client:
+            await mcp_client.initialize()
+
+            mcp_tools = await mcp_client.list_tools()
+            ollama_tools = [
+                {
+                    "type": "function",
+                    "function": {
                         "name": tool.name,
-                        "description": tool.description or "",
-                        "parameters": tool.input_schema or {"type": "object"},
+                        "description": tool.description,
+                        "parameters": tool.input_schema
                     }
-                    for tool in mcp_tools.tools
-                ]
-                tool_names = {tool["name"] for tool in gemini_tools}
-                interaction_input = req.message
+                } for tool in mcp_tools.tools
+            ]
 
-                while True:
-                    request = {
-                        "model": GEMINI_MODEL,
-                        "input": interaction_input,
-                        "system_instruction": SYSTEM_PROMPT,
-                        "tools": gemini_tools if chamadas_gemini < MAX_GEMINI_TOOL_CALLS else [],
-                    }
-                    if interaction_id:
-                        request["previous_interaction_id"] = interaction_id
+            while True:
+                response = await ollama.chat(
+                    model="qwen3:1.7b",
+                    messages=messages_for_llm,
+                    tools=ollama_tools
+                )
 
-                    try:
-                        interaction = await asyncio.wait_for(
-                            gemini.aio.interactions.create(**request),
-                            GEMINI_TIMEOUT_SECONDS,
-                        )
-                    except Exception as exc:
-                        raise HTTPException(
-                            status_code=502,
-                            detail="Não foi possível consultar a API Gemini.",
-                        ) from exc
+                assist_msg = response["message"]
+                messages_for_llm.append(assist_msg)
 
-                    interaction_id = interaction.id
+                if not assist_msg.get("tool_calls"):
+                    resposta = assist_msg.get("content", "")
+                    if resposta_afirma_aprovacao(resposta) and not compra_aprovada_nesta_requisicao:
+                        if intencao_criada_nesta_requisicao:
+                            resposta = (
+                                "A intenção de compra foi registrada, mas a compra ainda não foi aprovada. "
+                                "Confirme explicitamente se deseja pagar com Pix ou cartão."
+                            )
+                        else:
+                            resposta = (
+                                "Não foi possível confirmar uma compra aprovada pelo backend. "
+                                "Nenhuma transação foi concluída."
+                            )
+                    resposta_final = resposta
+
                     conn.execute(
-                        "UPDATE chats SET gemini_interaction_id = ? WHERE id = ?",
-                        (interaction_id, chat_id),
+                        "INSERT INTO messages (chat_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (chat_id, user_id, "assistant", resposta, datetime.now(timezone.utc).isoformat())
                     )
                     conn.commit()
+                    break
 
-                    function_calls = interaction_function_calls(interaction)
-                    if not function_calls:
-                        resposta = interaction_text(interaction)
-                        if resposta_afirma_aprovacao(resposta) and not compra_aprovada_nesta_requisicao:
-                            if intencao_criada_nesta_requisicao:
-                                resposta = (
-                                    "A intenção de compra foi registrada, mas a compra ainda não foi aprovada. "
-                                    "Confirme explicitamente se deseja pagar com Pix ou cartão."
-                                )
-                            else:
-                                resposta = (
-                                    "Não foi possível confirmar uma compra aprovada pelo backend. "
-                                    "Nenhuma transação foi concluída."
-                                )
+                tool_calls_dict = [t.model_dump() for t in assist_msg["tool_calls"]]
 
-                        conn.execute(
-                            "INSERT INTO messages (chat_id, user_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                            (chat_id, user_id, "assistant", resposta, datetime.now(timezone.utc).isoformat()),
-                        )
-                        conn.commit()
-                        resposta_final = resposta
-                        break
+                conn.execute(
+                    "INSERT INTO messages (chat_id, user_id, role, tool_calls_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (chat_id, user_id, "assistant", json.dumps(tool_calls_dict), datetime.now(timezone.utc).isoformat())
+                )
 
-                    chamadas_gemini += len(function_calls)
-                    conn.execute(
-                        "INSERT INTO messages (chat_id, user_id, role, tool_calls_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                        (
-                            chat_id,
-                            user_id,
-                            "assistant",
-                            json.dumps([serializar_modelo(call) for call in function_calls], ensure_ascii=False, default=str),
-                            datetime.now(timezone.utc).isoformat(),
-                        ),
-                    )
-                    conn.commit()
+                # CORREÇÃO DO DEADLOCK - SALVA NO BANCO ANTES DA TOOL DO MCP RODAR
+                conn.commit()
 
-                    function_results = []
-                    for function_call in function_calls:
-                        tool_name = getattr(function_call, "name", "")
-                        tool_args = getattr(function_call, "arguments", {})
-                        if not isinstance(tool_args, dict):
-                            tool_args = {}
+                for tool_call in assist_msg["tool_calls"]:
+                    t_name = tool_call.function.name
+                    t_args = tool_call.function.arguments
 
-                        if tool_name not in tool_names:
+                    if t_name == "realizar_compra":
+                        metodo_da_tool = t_args.get("metodo_pagamento") if isinstance(t_args, dict) else None
+
+                        if not metodo_confirmado:
                             result_text = json.dumps({
                                 "status": "recusado",
-                                "erro": "FERRAMENTA_NAO_AUTORIZADA",
-                                "mensagem": "A ferramenta solicitada não está disponível.",
+                                "erro": "CONFIRMACAO_PAGAMENTO_NECESSARIA",
+                                "mensagem": "A mensagem atual precisa confirmar Pix ou cartão antes da compra.",
                             }, ensure_ascii=False)
-                        elif tool_name == "realizar_compra":
-                            metodo_da_tool = tool_args.get("metodo_pagamento")
-                            if not metodo_confirmado:
-                                result_text = json.dumps({
-                                    "status": "recusado",
-                                    "erro": "CONFIRMACAO_PAGAMENTO_NECESSARIA",
-                                    "mensagem": "A mensagem atual precisa confirmar Pix ou cartão antes da compra.",
-                                }, ensure_ascii=False)
-                            elif metodo_da_tool != metodo_confirmado:
-                                result_text = json.dumps({
-                                    "status": "recusado",
-                                    "erro": "METODO_NAO_CONFIRMADO",
-                                    "mensagem": "O método enviado pela ferramenta não corresponde ao método confirmado pelo usuário.",
-                                }, ensure_ascii=False)
-                            else:
-                                result_text = await executar_tool_mcp(
-                                    mcp_client, tool_name, tool_args
-                                )
+                        elif metodo_da_tool != metodo_confirmado:
+                            result_text = json.dumps({
+                                "status": "recusado",
+                                "erro": "METODO_NAO_CONFIRMADO",
+                                "mensagem": "O método enviado pela ferramenta não corresponde ao método confirmado pelo usuário.",
+                            }, ensure_ascii=False)
                         else:
-                            result_text = await executar_tool_mcp(
-                                mcp_client, tool_name, tool_args
-                            )
-
+                            try:
+                                mcp_result = await mcp_client.call_tool(t_name, t_args)
+                                result_text = "".join([item.text for item in mcp_result.content if item.type == "text"])
+                            except Exception:
+                                # A falha também é registrada para não perder a trilha de auditoria.
+                                result_text = json.dumps({
+                                    "status": "recusado",
+                                    "erro": "ERRO_MCP",
+                                    "mensagem": "Não foi possível executar a ferramenta.",
+                                }, ensure_ascii=False)
+                    else:
                         try:
-                            resultado = json.loads(result_text)
-                        except json.JSONDecodeError:
-                            resultado = {}
+                            mcp_result = await mcp_client.call_tool(t_name, t_args)
+                            result_text = "".join([item.text for item in mcp_result.content if item.type == "text"])
+                        except Exception:
+                            # A falha também é registrada para não perder a trilha de auditoria.
+                            result_text = json.dumps({
+                                "status": "recusado",
+                                "erro": "ERRO_MCP",
+                                "mensagem": "Não foi possível executar a ferramenta.",
+                            }, ensure_ascii=False)
 
-                        if tool_name == "registrar_intencao" and isinstance(resultado, dict):
-                            intencao_criada_nesta_requisicao = intencao_criada_nesta_requisicao or (
-                                resultado.get("status") == "pendente" and bool(resultado.get("intencao_id"))
-                            )
-                        if tool_name == "realizar_compra" and isinstance(resultado, dict):
-                            compra_aprovada_nesta_requisicao = compra_aprovada_nesta_requisicao or (
-                                resultado.get("status") == "aprovado"
-                            )
+                    try:
+                        resultado = json.loads(result_text)
+                    except json.JSONDecodeError:
+                        resultado = {}
 
-                        registrar_auditoria(conn, user_id, chat_id, tool_name, tool_args, result_text)
-                        conn.execute(
-                            "INSERT INTO messages (chat_id, user_id, role, content, tool_name, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                            (chat_id, user_id, "tool", result_text, tool_name, datetime.now(timezone.utc).isoformat()),
+                    if t_name == "registrar_intencao" and isinstance(resultado, dict):
+                        intencao_criada_nesta_requisicao = intencao_criada_nesta_requisicao or (
+                            resultado.get("status") == "pendente"
+                            and bool(resultado.get("intencao_id"))
                         )
-                        function_results.append({
-                            "type": "function_result",
-                            "name": tool_name,
-                            "call_id": getattr(function_call, "id", ""),
-                            "result": [{"type": "text", "text": result_text}],
-                        })
-                    conn.commit()
-                    interaction_input = function_results
 
-        return {"response": resposta_final}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Não foi possível concluir a conversa.",
-        ) from exc
-    finally:
-        conn.close()
+                    if t_name == "realizar_compra" and isinstance(resultado, dict):
+                        compra_aprovada_nesta_requisicao = compra_aprovada_nesta_requisicao or (
+                            resultado.get("status") == "aprovado"
+                        )
+
+                    registrar_auditoria(
+                        conn,
+                        user_id,
+                        chat_id,
+                        t_name,
+                        t_args,
+                        result_text,
+                    )
+
+                    tool_msg = {
+                        "role": "tool",
+                        "name": t_name,
+                        "content": result_text
+                    }
+                    messages_for_llm.append(tool_msg)
+
+                    conn.execute(
+                        "INSERT INTO messages (chat_id, user_id, role, content, tool_name, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (chat_id, user_id, "tool", result_text, t_name, datetime.now(timezone.utc).isoformat())
+                    )
+                conn.commit()
+
+    conn.close()
+    return {"response": resposta_final}
 
 if __name__ == "__main__":
     import uvicorn

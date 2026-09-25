@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/FastAPI-005571?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB" alt="React">
   <img src="https://img.shields.io/badge/SQLite-07405E?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
-  <img src="https://img.shields.io/badge/Gemini_API-4285F4?style=flat-square&logo=google gemini&logoColor=white" alt="Gemini API">
+  <img src="https://img.shields.io/badge/Ollama-000000?style=flat-square&logo=ollama&logoColor=white" alt="Ollama">
 </p>
 
 ChatPay é um assistente virtual inteligente integrado a um sistema de pagamentos seguro utilizando a arquitetura **MCP (Model Context Protocol)**. O projeto conecta um agente de linguagem natural a ferramentas backend controladas para gerenciar catálogo de produtos, intenções de compra temporárias e efetivação de transações com controle de limite de crédito.
@@ -15,14 +15,14 @@ ChatPay é um assistente virtual inteligente integrado a um sistema de pagamento
 
 * **Backend:** Python, FastAPI, Uvicorn, SQLite
 * **Segurança e Autenticação:** JWT (JSON Web Tokens), Argon2 (`pwdlib`)
-* **IA & MCP:** Gemini API (`google-genai`), Python MCP SDK (`mcp`)
+* **IA & MCP:** Ollama, Python MCP SDK (`mcp`)
 * **Frontend:** React, Vite, CSS Moderno
 
 ---
 
 ## 🛠️ Arquitetura e Ferramentas (MCP Tools)
 
-O servidor MCP (`mcp_server/server.py`) expõe **4 ferramentas principais** que o Gemini pode acionar. O backend valida cada chamada antes de executá-la:
+O servidor MCP (`mcp_server/server.py`) expõe **3 ferramentas principais** que o LLM aciona de forma autônoma e segura:
 
 1. **`listar_catalogo`**: Consulta os produtos ativos e com estoque disponível no banco de dados.
 2. **`registrar_intencao`**: Cria um carrinho temporário (expira em 10 minutos) validando estoque, quantidade e regras de negócio sem movimentar saldo financeiro.
@@ -55,13 +55,37 @@ chatbot-pagamentos-mcp/
 
 * Node.js e npm instalados
 
-* Uma chave da Gemini API criada no [Google AI Studio](https://aistudio.google.com/apikey)
+* Servidor Ollama rodando localmente
 
-## 2. Configurar a Gemini API
+## 2. Configurar o Ollama
 
-Crie uma chave no Google AI Studio e mantenha-a somente no backend. O projeto lê `GEMINI_API_KEY` do arquivo `.env`; nunca coloque essa chave no React ou no Git.
+Instale o Ollama pelo [site oficial](https://ollama.com/download). Depois, abra um terminal e baixe o modelo utilizado pelo projeto:
 
-O modelo pode ser alterado em `GEMINI_MODEL`; o padrão é `gemini-flash-latest`.
+```shell
+ollama pull qwen3:1.7b
+```
+
+O backend usa exatamente o modelo `qwen3:1.7b`, configurado em `backend/main.py`.
+
+Verifique se o modelo foi instalado:
+
+```shell
+ollama list
+```
+
+O Ollama normalmente inicia o serviço automaticamente. Se ele não estiver rodando, inicie-o com:
+
+```shell
+ollama serve
+```
+
+Se aparecer uma mensagem informando que a porta já está em uso, o serviço provavelmente já está rodando; nesse caso, não é necessário iniciar outro processo.
+
+Opcionalmente, teste o modelo diretamente:
+
+```shell
+ollama run qwen3:1.7b
+```
 
 ## 3. Configurar o Backend e o Banco de Dados
 No terminal, navegue até a raiz do projeto e configure o ambiente virtual:
@@ -72,7 +96,7 @@ python -m venv .venv
 .venv\Scripts\activate
 
 # Instalar dependências da API e do MCP
-pip install -r requirements.txt
+pip install fastapi uvicorn pydantic pyjwt pwdlib argon2-cffi ollama mcp python-dotenv
 
 # Criar a configuração local a partir do exemplo (Linux/macOS)
 cp .env.example .env
@@ -82,7 +106,7 @@ cp .env.example .env
 # Gere uma chave aleatória com pelo menos 32 bytes
 python -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(32))"
 
-# Copie a linha exibida acima para o arquivo .env e preencha GEMINI_API_KEY
+# Copie a linha exibida acima para o arquivo .env, substituindo SECRET_KEY=
 
 # Executar o seed para criar e popular o banco de dados do zero
 python seed.py
@@ -118,11 +142,21 @@ Para testar os cenários de limite excedido e sucesso, utilize as credenciais pa
 
 * Senha: 123456
 
-## 6. Caso dê erro de conexão com a Gemini API/MCP
+## 6. Caso dê erro de conexão com o Ollama/MCP
 
-Confira se `GEMINI_API_KEY` está preenchida no `.env`, se o modelo definido em `GEMINI_MODEL` está disponível para sua chave e se o backend consegue iniciar o servidor MCP local.
+Para verificar quais modelos do Ollama estão instalados na sua máquina, execute:
 
-O backend não depende do Ollama nem de nenhum processo local de modelo.
+```shell
+ollama list
+```
+
+O back-end está configurado para utilizar o modelo `qwen3:1.7b`. Caso você tenha outra versão instalada, altere a configuração do back-end para utilizar exatamente o nome exibido pelo comando `ollama list`.
+
+No meu caso, por exemplo:
+
+```text
+qwen3:1.7b
+```
 
 ---
 
